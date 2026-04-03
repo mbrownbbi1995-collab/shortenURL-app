@@ -6,11 +6,10 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 import os
 
-# Database setup - uses a file-based SQLite database
+# Database setup
 DB_NAME = "shortlinks.db"
 
 def init_db():
-    """Initialize the database"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute('''
@@ -29,11 +28,9 @@ def init_db():
 init_db()
 
 def get_current_utc():
-    """Return current UTC datetime as string (timezone-aware)"""
     return datetime.now(timezone.utc)
 
 def generate_short_code(long_url: str, length: int = 6) -> str:
-    """Generate a unique short code"""
     chars = string.ascii_letters + string.digits
     for _ in range(3):
         code = ''.join(random.choice(chars) for _ in range(length))
@@ -47,7 +44,6 @@ def generate_short_code(long_url: str, length: int = 6) -> str:
     return hashlib.blake2b(long_url.encode(), digest_size=length//2).hexdigest()[:length]
 
 def store_link(code: str, long_url: str, expiry_hours: float, max_clicks: int):
-    """Store a new short link in the database"""
     expires_at = None
     if expiry_hours > 0:
         expires_at = (get_current_utc() + timedelta(hours=expiry_hours)).isoformat()
@@ -61,7 +57,6 @@ def store_link(code: str, long_url: str, expiry_hours: float, max_clicks: int):
     conn.close()
 
 def get_link_info(code: str):
-    """Retrieve information about a short link"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT long_url, expires_at, max_clicks, click_count FROM links WHERE code = ?", (code,))
@@ -77,7 +72,6 @@ def get_link_info(code: str):
     return None
 
 def increment_click_count(code: str):
-    """Increment the click counter for a short link"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("UPDATE links SET click_count = click_count + 1 WHERE code = ?", (code,))
@@ -85,7 +79,6 @@ def increment_click_count(code: str):
     conn.close()
 
 def cleanup_expired_links():
-    """Remove expired links from the database"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     now = get_current_utc().isoformat()
@@ -95,7 +88,6 @@ def cleanup_expired_links():
     conn.close()
 
 def perform_redirect():
-    """Handle redirection when someone visits a short link"""
     query_params = st.query_params
     if "code" in query_params:
         code = query_params["code"]
@@ -117,7 +109,6 @@ def perform_redirect():
             st.error("🔁 This short link has reached its click limit.")
             st.stop()
         
-        # Increment click count and redirect
         increment_click_count(code)
         st.markdown(
             f"""
@@ -129,34 +120,22 @@ def perform_redirect():
         )
         st.stop()
 
-def get_base_url():
-    """Get the base URL of the deployed app"""
-    # For Streamlit Cloud, use the built-in method to get the app URL
-    if hasattr(st, 'context') and hasattr(st.context, 'get'):
-        try:
-            # This works on Streamlit Cloud
-            return st.context.get("streamlit_app_url", "").rstrip('/')
-        except:
-            pass
-    
-    # Fallback to relative URL (works on any domain)
-    return ""
-
 def main():
     st.set_page_config(page_title="Temporary URL Shortener", page_icon="🔗")
-    
-    # Check if this is a redirect request
     perform_redirect()
-    
-    # Clean up expired links periodically
     cleanup_expired_links()
     
-    # Main title
     st.title("🔗 Temporary URL Shortener")
     st.markdown("Create short links that **self‑destruct** after a time limit or number of clicks.")
     
     # Show deployment info
     st.info("🌐 **This app is live on Streamlit Cloud** - Share short links with anyone, anywhere!")
+    
+    # Session state to store the generated short URL
+    if 'generated_short_url' not in st.session_state:
+        st.session_state.generated_short_url = None
+    if 'generated_code' not in st.session_state:
+        st.session_state.generated_code = None
     
     # --- Form for creating short links ---
     with st.form("create_short_link"):
@@ -194,39 +173,74 @@ def main():
             code = generate_short_code(long_url)
             store_link(code, long_url, expiry_hours, max_clicks)
             
-            # Build the full short URL (relative path works on any domain)
-            short_url = f"?code={code}"
+            # Store in session state
+            st.session_state.generated_code = code
             
             st.success("✅ Short link created successfully!")
-            st.markdown("### 🔗 Share this link:")
+    
+    # Display the generated short link if it exists
+    if st.session_state.generated_code:
+        code = st.session_state.generated_code
+        
+        st.markdown("### 🔗 Your Short Link (Share This):")
+        st.markdown("**The original long URL is completely hidden from recipients**")
+        
+        # Create a container for the short link display
+        col_display, col_copy = st.columns([4, 1])
+        
+        with col_display:
+            # Show the short link in a text input for easy selection
+            short_link_display = st.text_input(
+                "Short link (select and copy with Ctrl+C):",
+                value=f"?code={code}",
+                key="short_link_display",
+                disabled=False,
+                label_visibility="collapsed"
+            )
+        
+        with col_copy:
+            # Simple copy button using st.button
+            if st.button("📋 Copy Full Short Link", key="copy_main_btn", use_container_width=True):
+                # Use st.write to show the link to copy
+                st.markdown("---")
+                st.info("**Copy this full URL:**")
+                st.code(f"https://{st.get_option('browser.serverAddress')}/?code={code}", language="text")
+                st.success("✅ **Full URL is shown above - select it and press Ctrl+C!**")
+        
+        # Show the full URL in a code block for easy copying
+        st.markdown("### Full URL to share:")
+        
+        # Try to get the actual deployed URL
+        try:
+            # This works on Streamlit Cloud
+            from urllib.parse import urlparse
+            import requests
             
-            # Display the short link prominently
-            st.code(short_url, language="text")
-            
-            # Copy button using Streamlit's native button with JavaScript
-            if st.button("📋 Copy Short Link", use_container_width=True):
-                # JavaScript to copy the full URL
-                st.markdown(f"""
-                <script>
-                    const fullUrl = window.location.origin + window.location.pathname + "?code={code}";
-                    navigator.clipboard.writeText(fullUrl);
-                    alert("Short link copied to clipboard!\\n\\n" + fullUrl);
-                </script>
-                """, unsafe_allow_html=True)
-                st.success("✅ Link copied to clipboard!")
-            
-            # Show the full URL for manual copy
-            st.markdown("**Or copy this full URL:**")
-            st.caption("(The long URL is completely hidden from recipients)")
-            
-            # Display link details
-            st.info(f"""
-            **📊 Link Details:**
-            - **Short Code:** `{code}`
-            - **Expires:** {expiry_hours} hours {'(never)' if expiry_hours == 0 else f'({expiry_hours} hours)'}
-            - **Max Clicks:** {max_clicks}
-            - **Original URL is hidden** from anyone who receives the short link
-            """)
+            # Get the current URL from the browser
+            full_short_url = f"?code={code}"
+            st.code(full_short_url, language="text")
+            st.caption("📝 **Note:** When deployed on Streamlit Cloud, this becomes:")
+            st.caption(f"`https://{st.get_option('browser.serverAddress')}/?code={code}`")
+        except:
+            st.code(f"?code={code}", language="text")
+        
+        # Alternative copy method using st.code's built-in copy button
+        st.markdown("### 💡 Easy Copy Method:")
+        st.markdown("The code block above has a **copy button** in the top-right corner (📋) - click it to copy!")
+        
+        # Display link details
+        st.info(f"""
+        **📊 Link Details:**
+        - **Short Code:** `{code}`
+        - **Expires:** {expiry_hours} hours {'(never)' if expiry_hours == 0 else ''}
+        - **Max Clicks:** {max_clicks}
+        - **Original URL is completely hidden** from recipients
+        """)
+        
+        # Add a reset button to clear the current short link
+        if st.button("🔄 Create Another Short Link", use_container_width=True):
+            st.session_state.generated_code = None
+            st.rerun()
     
     # --- Display active links for management ---
     with st.expander("📋 Manage Active Short Links", expanded=False):
@@ -235,38 +249,56 @@ def main():
         conn.close()
         
         if rows:
-            st.markdown("**Your active short links (click the delete button to remove):**")
+            st.markdown("**Your active short links:**")
             for row in rows:
                 code, long_url, expires_at, max_clicks, clicks, created_at = row
-                col1, col2, col3 = st.columns([3, 1, 1])
+                
+                col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
                 with col1:
                     st.markdown(f"**Code:** `{code}`")
-                    st.caption(f"Original: `{long_url[:60]}...`")
+                    st.caption(f"Original: `{long_url[:50]}...`")
                     st.caption(f"Clicks: {clicks}/{max_clicks} | Expires: {expires_at[:10] if expires_at else 'Never'}")
+                
                 with col2:
+                    # Copy button for this specific link
                     if st.button(f"📋 Copy", key=f"copy_{code}"):
                         st.markdown(f"""
-                        <script>
-                            const fullUrl = window.location.origin + window.location.pathname + "?code={code}";
-                            navigator.clipboard.writeText(fullUrl);
-                            alert("Copied: " + fullUrl);
-                        </script>
+                        <div style="background-color:#f0f2f6; padding:10px; border-radius:5px; margin:10px 0;">
+                            <b>Copy this URL:</b><br/>
+                            <code>?code={code}</code>
+                        </div>
                         """, unsafe_allow_html=True)
-                        st.success("Copied!")
+                        st.info(f"📋 **Copy this full URL:** `?code={code}`")
+                
                 with col3:
+                    # Test button
+                    if st.button(f"🔗 Test", key=f"test_{code}"):
+                        st.markdown(f"[Click to test](?code={code})", unsafe_allow_html=True)
+                        st.info(f"🔗 **Test link:** `?code={code}`")
+                
+                with col4:
+                    # Delete button
                     if st.button(f"🗑️ Delete", key=f"del_{code}"):
                         conn = sqlite3.connect(DB_NAME)
                         conn.execute("DELETE FROM links WHERE code = ?", (code,))
                         conn.commit()
                         conn.close()
                         st.rerun()
+                
                 st.markdown("---")
         else:
             st.write("No active short links yet. Create your first one above!")
     
-    # Footer
+    # Footer with instructions
     st.markdown("---")
-    st.caption("🔒 Your original long URLs are never exposed to recipients. Links self-destruct automatically.")
+    st.markdown("### 📖 How to Use:")
+    st.markdown("""
+    1. **Create a short link** by entering your long file URL above
+    2. **Copy the short link** using the code block's copy button (📋 in top-right corner)
+    3. **Share only the short link** with others - they will never see your original URL
+    4. **Links expire automatically** after the set time or number of clicks
+    """)
+    st.caption("🔒 Your original long URLs are never exposed to recipients.")
 
 if __name__ == "__main__":
     main()
