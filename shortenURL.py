@@ -272,9 +272,9 @@ def main():
         
         # Method 3: Display what the full URL will look like
         st.markdown("### 📍 Full URL Preview:")
-        st.info(f"`https://your-app.streamlit.app/?code={code}`")
-        st.caption("When deployed, replace 'your-app' with your actual Streamlit Cloud app name")
-        
+        st.info(f"`https://maapnext-url-shortener.streamlit.app/?code={code}`")
+        #st.caption("This is your live short link URL when deployed")
+                
         # Link details
         st.markdown("### 📊 Link Details:")
         details_col1, details_col2, details_col3 = st.columns(3)
